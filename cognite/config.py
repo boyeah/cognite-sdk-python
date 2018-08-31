@@ -11,7 +11,7 @@ _CONFIG_API_KEY = ""
 _CONFIG_PROJECT = ""
 _CONFIG_COOKIES = {}
 _CONFIG_BASE_URL = None
-_CONFIG_RETRIES = None
+_CONFIG_RETRIES = 5
 _CONFIG_WORKERS = 25
 
 def configure_session(api_key="", project="", cookies=None, debug=False):

@@ -10,6 +10,7 @@ https://doc.cognitedata.com/0.5/#Cognite-API-Time-series
 import io
 import os
 import time
+import math
 from functools import partial
 from multiprocessing import Pool
 from typing import List
@@ -360,7 +361,7 @@ def post_datapoints(name, datapoints: List[Datapoint], **kwargs):
 
     def do_post(chunk):
         body = {"items": [dp.__dict__ for dp in chunk]}
-        return _utils.post_request(url, body=body, headers=headers, sessions=session)
+        return _utils.post_request(url, body=body, headers=headers, session=session)
 
     ul_dps_limit = 100000
     num_chunks = get_num_chunks(len(datapoints), ul_dps_limit, num_workers)
@@ -369,7 +370,7 @@ def post_datapoints(name, datapoints: List[Datapoint], **kwargs):
 
     responses = [None for _ in chunks]
     failures = [None for _ in chunks]
-    for retries in range(config.get_number_of_retries() + 1):
+    for retry in range(config.get_number_of_retries() + 1):
         futures = [do_post(chunk) for chunk, res in zip(chunks, responses) if not res]
         fut_idx = 0
         for res_idx in range(len(responses)):
@@ -381,8 +382,12 @@ def post_datapoints(name, datapoints: List[Datapoint], **kwargs):
                     responses[res_idx] = response
                 else:
                     failures[res_idx] = response
+                    print(f'Failure on retry {retry}: response #{res_idx} had status '
+                          f'code {response.status_code}.')
             except Exception as e:
                 failures[res_idx] = e
+                print(f'Failure on retry {retry}: response #{res_idx} threw exception with '
+                      f'message {e}.')
             fut_idx += 1
     for res_idx, fail in enumerate(failures):
         if responses[res_idx] is None:
