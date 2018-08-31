@@ -12,7 +12,7 @@ _CONFIG_PROJECT = ""
 _CONFIG_COOKIES = {}
 _CONFIG_BASE_URL = None
 _CONFIG_RETRIES = None
-
+_CONFIG_WORKERS = 25
 
 def configure_session(api_key="", project="", cookies=None, debug=False):
     """Sets session variables.
@@ -102,3 +102,11 @@ def get_number_of_retries():
         int: current number of retries attempted for requests.
     """
     return RETRY_LIMIT if _CONFIG_RETRIES is None else _CONFIG_RETRIES
+
+
+def get_number_of_parallel_workers(num_workers):
+    """Return the number of parallel workers for performing multiple
+    asynchronous requests.
+
+    """
+    return num_workers if num_workers else _CONFIG_WORKERS

@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """Timeseries Module
 
-This module mirrors the Timeseries API. It allows you to fetch data from the api and output it in various formats.
+This module mirrors the Timeseries API. It allows you to fetch data from
+the api and output it in various formats.
 
 https://doc.cognitedata.com/0.5/#Cognite-API-Time-series
+
 """
 import io
 import os
@@ -12,6 +14,10 @@ from functools import partial
 from multiprocessing import Pool
 from typing import List
 from urllib.parse import quote
+
+import numpy as np
+from requests_futures.sessions import FuturesSession
+from concurrent.futures import ThreadPoolExecutor
 
 import cognite._constants as _constants
 import cognite._utils as _utils
@@ -324,6 +330,11 @@ def post_multi_tag_datapoints(timeseries_with_datapoints: List[TimeseriesWithDat
     return res.json()
 
 
+def get_num_chunks(num_datapoints, max_post_size, num_workers):
+    nd = num_datapoints
+    return math.ceil(min(max(num_workers, nd/max_post_size), nd))
+
+
 def post_datapoints(name, datapoints: List[Datapoint], **kwargs):
     """Insert a list of datapoints.
 
@@ -340,18 +351,44 @@ def post_datapoints(name, datapoints: List[Datapoint], **kwargs):
     Returns:
         An empty response.
     """
+    num_workers = config.get_number_of_parallel_workers(kwargs.get("workers"))
     api_key, project = config.get_config_variables(kwargs.get("api_key"), kwargs.get("project"))
-    url = config.get_base_url(api_version=0.5) + "/projects/{}/timeseries/data/{}".format(project, quote(name, safe=""))
-
+    url = config.get_base_url(api_version=0.5) + \
+        "/projects/{}/timeseries/data/{}".format(project, quote(name, safe=""))
     headers = {"api-key": api_key, "content-type": "application/json", "accept": "application/json"}
+    session = FuturesSession(executor=ThreadPoolExecutor(max_workers=num_workers))
+
+    def do_post(chunk):
+        body = {"items": [dp.__dict__ for dp in chunk]}
+        return _utils.post_request(url, body=body, headers=headers, sessions=session)
 
     ul_dps_limit = 100000
-    i = 0
-    while i < len(datapoints):
-        body = {"items": [dp.__dict__ for dp in datapoints[i : i + ul_dps_limit]]}
-        res = _utils.post_request(url, body=body, headers=headers)
-        i += ul_dps_limit
-    return res.json()
+    num_chunks = get_num_chunks(len(datapoints), ul_dps_limit, num_workers)
+    chunk_indices = np.linspace(0, len(datapoints), num_chunks + 1, dtype=int)
+    chunks = [datapoints[s:e] for s, e in zip(chunk_indices[:-1], chunk_indices[1:])]
+
+    responses = [None for _ in chunks]
+    failures = [None for _ in chunks]
+    for retries in range(config.get_number_of_retries() + 1):
+        futures = [do_post(chunk) for chunk, res in zip(chunks, responses) if not res]
+        fut_idx = 0
+        for res_idx in range(len(responses)):
+            if responses[res_idx]:
+                continue
+            try:
+                response = futures[fut_idx].result()
+                if response.status_code == 200:
+                    responses[res_idx] = response
+                else:
+                    failures[res_idx] = response
+            except Exception as e:
+                failures[res_idx] = e
+            fut_idx += 1
+    for res_idx, fail in enumerate(failures):
+        if responses[res_idx] is None:
+            responses[res_idx] = fail
+
+    return responses
 
 
 def get_latest(name, **kwargs):
@@ -499,7 +536,7 @@ def get_datapoints_frame(time_series, aggregates, granularity, start=None, end=N
 
         limit (str): Max number of rows to return. If limit is specified, this method will not automate
                         paging and will return a maximum of 100,000 rows.
-        
+
         processes (int):    Number of download processes to run in parallell. Defaults to number returned by cpu_count().
 
     Returns:

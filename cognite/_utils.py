@@ -14,6 +14,8 @@ from datetime import datetime
 from typing import List, Callable
 
 import requests
+from concurrent.futures import ThreadPoolExecutor
+from requests_futures.sessions import FuturesSession
 
 import cognite.config as config
 
@@ -58,8 +60,12 @@ def get_request(url, params=None, headers=None, cookies=None):
     raise APIError(err_mess)
 
 
-def post_request(url, body, headers=None, params=None, cookies=None, use_gzip=False):
+def post_request(url, body, headers=None, params=None, cookies=None, use_gzip=False, session=None):
     """Perform a POST request with a predetermined number of retries."""
+    async = True if session else False
+    if not async:
+        session = FuturesSession(executor=ThreadPoolExecutor(max_workers=1))
+
     _log_request("POST", url, body=body, params=params, headers=headers, cookies=cookies)
 
     for number_of_tries in range(config.get_number_of_retries() + 1):
@@ -69,15 +75,13 @@ def post_request(url, body, headers=None, params=None, cookies=None, use_gzip=Fa
                     headers["Content-Encoding"] = "gzip"
                 else:
                     headers = {"Content-Encoding": "gzip"}
-                res = requests.post(
-                    url,
-                    data=gzip.compress(json.dumps(body).encode("utf-8")),
-                    headers=headers,
-                    params=params,
-                    cookies=cookies,
-                )
+                data = gzip.compress(json.dumps(body).encode("utf-8"))
             else:
-                res = requests.post(url, data=json.dumps(body), headers=headers, params=params, cookies=cookies)
+                data = json.dumps(body)
+            future = session.post(url, data=data, headers=headers, params=params, cookies=cookies)
+            if async:
+                return future
+            res = future.result()
             if res.status_code == 200:
                 return res
         except Exception as e:
